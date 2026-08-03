@@ -1,0 +1,658 @@
+{
+  "name": "AI Mastery",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {
+          "reset": false
+        }
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        0,
+        144
+      ],
+      "id": "3203cdc1-9017-427e-b6c6-f7744f431d6d",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.noOp",
+      "name": "Replace Me",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "id": "77242cb6-42f5-4d49-9140-2fa2874c7677"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        224,
+        128
+      ],
+      "id": "9f538443-5c60-4167-bba8-63e910491a3f",
+      "name": "RSS Read"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{$json.promptPayload.prompt}}",
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        896,
+        128
+      ],
+      "id": "a16299db-62b4-429c-863d-02c6d13be38c",
+      "name": "Basic LLM Chain",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(item => {\n  const raw =\n    item.json.text ||\n    item.json.response ||\n    item.json.output ||\n    item.json.completion ||\n    '';\n\n  let parsed = {};\n\n  try {\n    parsed = JSON.parse(raw);\n  } catch (e) {\n    parsed = {\n      summary: raw,\n      why_it_matters: '',\n      relevance_score: 0,\n      parse_error: true\n    };\n  }\n\n  return {\n    json: {\n      ...item.json,\n      ...parsed\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -416,
+        400
+      ],
+      "id": "5128d312-37b4-4c52-ab2d-101d9dad9c8a",
+      "name": "Parse the LLM output"
+    },
+    {
+      "parameters": {
+        "jsCode": "const inputItems = $input.all();\n\nconst results = inputItems.filter((item) => {\n  const data = item.json || {};\n\n  // Read relevance score from common possible locations\n  const rawScore =\n    data.relevance_score ??\n    data.relevanceScore ??\n    data.score ??\n    data.output?.relevance_score ??\n    data.output?.relevanceScore ??\n    data.output?.score ??\n    0;\n\n  const score = Number(rawScore);\n\n  // Handle parse_error as boolean or string\n  const rawParseError =\n    data.parse_error ??\n    data.parseError ??\n    data.output?.parse_error ??\n    data.output?.parseError ??\n    false;\n\n  const hasParseError =\n    rawParseError === true ||\n    String(rawParseError).trim().toLowerCase() === \"true\";\n\n  return !hasParseError && !Number.isNaN(score) && score >= 7;\n});\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        400
+      ],
+      "id": "da0b0f5b-38a7-4951-a3ac-d96eb8c79b4e",
+      "name": "Filter acc to relevance"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{\n  json: {\n    articles: items.map(item => ({\n      title: item.json.title,\n      summary: item.json.summary,\n      why_it_matters: item.json.why_it_matters,\n      relevance_score: item.json.relevance_score,\n      link: item.json.link\n    }))\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -16,
+        400
+      ],
+      "id": "e142988e-e163-4a99-9f07-0a46be0d195c",
+      "name": "Bundle ideas"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw = String($input.first().json.text || '').trim();\n\nif (!raw) {\n  return [{\n    json: {\n      error: 'empty_response',\n      reason: 'The text field is empty.'\n    }\n  }];\n}\n\nlet text = raw\n  .replace(/```json/gi, '')\n  .replace(/```/g, '')\n  .trim();\n\n// Prefer content after a completed thinking block\nconst thinkEnd = text.toLowerCase().lastIndexOf('</think>');\n\nif (thinkEnd !== -1) {\n  text = text.slice(thinkEnd + '</think>'.length).trim();\n}\n\n// Find all possible JSON objects\nconst candidates = [];\nlet depth = 0;\nlet start = -1;\nlet inString = false;\nlet escaped = false;\n\nfor (let i = 0; i < text.length; i++) {\n  const char = text[i];\n\n  if (escaped) {\n    escaped = false;\n    continue;\n  }\n\n  if (char === '\\\\' && inString) {\n    escaped = true;\n    continue;\n  }\n\n  if (char === '\"') {\n    inString = !inString;\n    continue;\n  }\n\n  if (inString) {\n    continue;\n  }\n\n  if (char === '{') {\n    if (depth === 0) {\n      start = i;\n    }\n\n    depth++;\n  } else if (char === '}') {\n    depth--;\n\n    if (depth === 0 && start !== -1) {\n      candidates.push(text.slice(start, i + 1));\n      start = -1;\n    }\n  }\n}\n\n// Try candidates from last to first because final output is usually last\nlet parsed = null;\nlet selectedCandidate = null;\nlet lastError = null;\n\nfor (let i = candidates.length - 1; i >= 0; i--) {\n  const candidate = candidates[i].trim();\n\n  // Skip schema examples containing placeholders\n  if (\n    candidate.includes('...') ||\n    candidate.includes('…')\n  ) {\n    continue;\n  }\n\n  try {\n    const value = JSON.parse(candidate);\n\n    if (\n      Array.isArray(value?.ideas) ||\n      value?.angle ||\n      value?.hook\n    ) {\n      parsed = value;\n      selectedCandidate = candidate;\n      break;\n    }\n  } catch (error) {\n    lastError = error.message;\n  }\n}\n\nif (!parsed) {\n  return [{\n    json: {\n      error: 'no_valid_final_json',\n      reason:\n        'The model produced reasoning or a schema example, but did not complete the final JSON response.',\n      parse_error: lastError,\n      candidate_count: candidates.length,\n      response_appears_truncated:\n        raw.includes('<think>') &&\n        !raw.includes('</think>'),\n      raw\n    }\n  }];\n}\n\nlet ideas = [];\n\nif (Array.isArray(parsed.ideas)) {\n  ideas = parsed.ideas;\n} else if (\n  parsed.ideas &&\n  typeof parsed.ideas === 'object'\n) {\n  ideas = [parsed.ideas];\n} else if (parsed.angle || parsed.hook) {\n  ideas = [parsed];\n}\n\nif (!ideas.length) {\n  return [{\n    json: {\n      error: 'no_ideas_found',\n      parsed,\n      selectedCandidate\n    }\n  }];\n}\n\nreturn ideas\n  .slice(0, 3)\n  .map((idea, index) => ({\n    json: {\n      idea_number: index + 1,\n      angle: idea.angle || '',\n      hook: idea.hook || '',\n      related_service: idea.related_service || '',\n      target_audience: idea.target_audience || ''\n    }\n  }));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        400
+      ],
+      "id": "9b89dad0-08b2-484f-b146-2b77c58d3fd0",
+      "name": "Parsing the output"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a content strategist for Mayhem Softwares Bangladesh.\n\nCompany expertise:\n- AI & Machine Learning\n- Cloud Engineering\n- DevOps & Automation\n- ERP & Business Systems\n- Web Development\n- Mobile App Development\n\nYour writing style:\n- Practical\n- Engineering-focused\n- Business-oriented\n- Actionable\n- Avoid marketing hype\n\nGenerate exactly THREE content ideas based on the news below.\n\nIMPORTANT RULES:\n- Return ONLY valid JSON.\n- Do NOT explain your reasoning.\n- Do NOT include thinking, analysis, or <think> tags.\n- Do NOT use markdown.\n- Do NOT wrap the JSON in ``` blocks.\n- The first character of your response must be {\n- The last character of your response must be }\n- Do NOT use placeholders such as \"...\".\n- Every field must contain actual text.\n\nReturn this exact structure:\n\n{\n  \"ideas\": [\n    {\n      \"angle\": \"string\",\n      \"hook\": \"string\",\n      \"related_service\": \"string\",\n      \"target_audience\": \"string\"\n    },\n    {\n      \"angle\": \"string\",\n      \"hook\": \"string\",\n      \"related_service\": \"string\",\n      \"target_audience\": \"string\"\n    },\n    {\n      \"angle\": \"string\",\n      \"hook\": \"string\",\n      \"related_service\": \"string\",\n      \"target_audience\": \"string\"\n    }\n  ]\n}\n\nNews:\n{{ JSON.stringify($json.articles, null, 2) }}",
+        "hasOutputParser": true,
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        192,
+        400
+      ],
+      "id": "857b7d5c-2a7a-4b80-bfe3-315821f1f7c8",
+      "name": "Generate content ideas",
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "return items.map(item => {\n  const j = item.json;\n\n  return {\n    json: {\n      title: j.title || '',\n      link: j.link || '',\n      pubDate: j.isoDate || j.pubDate || '',\n      source: j.source || 'Unknown',\n      author: j.creator || j.author || '',\n      snippet: j.contentSnippet || j.content || '',\n      guid: j.guid || j.link || '',\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        384,
+        128
+      ],
+      "id": "34f3fb8e-fdf9-4fda-bcbb-4f97524bf73a",
+      "name": "Cleaning"
+    },
+    {
+      "parameters": {
+        "jsCode": "const keywords = [\n  'ai','cloud','startup','developer','saas',\n  'automation','machine learning','data','security'\n];\n\nreturn items.filter(item => {\n  const text = (item.json.title + ' ' + item.json.snippet).toLowerCase();\n  return keywords.some(k => text.includes(k));\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        544,
+        128
+      ],
+      "id": "55eb2734-4377-4eca-aecb-9a35755cc365",
+      "name": "sort by keywords"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process a maximum of 10 articles\nreturn items.slice(0, 10).map(item => {\n  const a = item.json;\n\n  const promptPayload = {\n    model: \"llama-3.3-70b-versatile\",\n    temperature: 0.3,\n    prompt: `\nYou are a tech-news analyst for Mayhem Softwares Bangladesh.\n\nCompany niche:\n- Web Development\n- Mobile App Development\n- Cloud Engineering\n- ERP & Business Systems\n- AI & Machine Learning\n- DevOps & Automation\n\nTone:\n- Sharp\n- Practical\n- Engineering-focused\n- Business-oriented\n- Not hype-driven\n\nAnalyze this article and return ONLY valid JSON in the following format:\n\n{\n  \"summary\": \"\",\n  \"why_it_matters\": \"\",\n  \"audience_fit\": \"\",\n  \"trend_tags\": [\"\", \"\", \"\"],\n  \"relevance_score\": 0,\n  \"novelty_score\": 0,\n  \"discussion_score\": 0\n}\n\nScoring:\n- relevance_score: 0-10\n- novelty_score: 0-10\n- discussion_score: 0-10\n\nDo not return markdown.\nDo not explain.\nReturn JSON only.\n\nArticle:\nTitle: ${a.title || \"\"}\nSource: ${a.source || \"\"}\nPublished: ${a.pubDate || \"\"}\nAuthor: ${a.author || \"\"}\nSnippet: ${a.snippet || \"\"}\nLink: ${a.link || \"\"}\n`.trim()\n  };\n\n  return {\n    json: {\n      ...a,\n      promptPayload\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        128
+      ],
+      "id": "49b2cfe2-9dfa-4654-a8c1-636d92e6b40e",
+      "name": "Select relevant articles"
+    },
+    {
+      "parameters": {
+        "jsCode": "return [\n  { json: { url: 'https://techcrunch.com/feed/', source: 'TechCrunch' } },\n  { json: { url: 'https://www.theverge.com/rss/index.xml', source: 'The Verge' } },\n  { json: { url: 'https://feeds.arstechnica.com/arstechnica/index', source: 'Ars Technica' } }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -240,
+        144
+      ],
+      "id": "08ab5d86-6dc8-475f-8d8c-513f112fe3ae",
+      "name": "List of websites"
+    },
+    {
+      "parameters": {
+        "jsCode": "const randomItem = items[Math.floor(Math.random() * items.length)];\n\nreturn [\n  {\n    json: randomItem.json\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        752,
+        400
+      ],
+      "id": "a2efef43-ce8e-4a4b-a89e-62fad80fdbec",
+      "name": "Pick first idea"
+    },
+    {
+      "parameters": {
+        "jsCode": "const raw =\n  items[0].json.text ||\n  items[0].json.response ||\n  items[0].json.output ||\n  '';\n\n// Ensure it's always treated as string content\nlet mdx = '';\n\ntry {\n  mdx = typeof raw === 'string' ? raw : JSON.stringify(raw);\n} catch (e) {\n  mdx = 'Error: Unable to process MDX content';\n}\n\nreturn [\n  {\n    json: {\n      content: mdx\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        400
+      ],
+      "id": "3f534925-7102-4211-8a35-e757715c79be",
+      "name": "Parsing the output1"
+    },
+    {
+      "parameters": {
+        "operation": "toText",
+        "sourceProperty": "fileContent",
+        "binaryPropertyName": "=data",
+        "options": {
+          "fileName": "={{ $json.fileName }}"
+        }
+      },
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1.1,
+      "position": [
+        -432,
+        736
+      ],
+      "id": "c1c87afa-2957-4e67-aeb5-d4b94d09c24f",
+      "name": "Convert to File"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a senior technical content strategist and B2B technology writer for **Mayhem Softwares Bangladesh**.\n\n# Company Expertise\n\nMayhem Softwares Bangladesh specializes in:\n\n- Artificial Intelligence & Machine Learning\n- Cloud Engineering\n- DevOps & Automation\n- ERP & Business Systems\n- Web Development\n- Mobile App Development\n\n# Your Role\n\nTransform the provided technology news into a professional, SEO-friendly blog article that:\n\n- Educates business leaders and technical professionals.\n- Explains why the news matters.\n- Connects the news to real-world business challenges.\n- Demonstrates Mayhem Softwares Bangladesh's expertise naturally.\n- Never sounds promotional or salesy.\n- Maintains a professional and authoritative tone.\n\nThe article should feel like an original thought-leadership piece rather than a news summary.\n\n---\n\n# Input Variables\n\nTitle:\n{{$json.title}}\n\nAngle:\n{{$json.angle}}\n\nTarget Audience:\n{{$json.target_audience}}\n\nRelated Service:\n{{$json.related_service}}\n\nOriginal News:\n{{$json.summary}}\n\nSource:\n{{$json.source}}\n\nHook:\n{{$json.hook}}\n\n---\n\n# Writing Instructions\n\n1. Begin with a compelling introduction using the supplied hook.\n\n2. Summarize the news in your own words without copying the source.\n\n3. Explain:\n\n- Why this development matters\n- Which industries are affected\n- What businesses should learn\n- What technical teams should consider\n\n4. Connect the discussion naturally to:\n\n- AI & Machine Learning\n- Cloud Engineering\n- DevOps\n- ERP Systems\n- Web Development\n- Mobile Development\n\nOnly mention services that are genuinely relevant.\n\n5. Include practical insights.\n\nAvoid generic statements.\n\nProvide examples like:\n\n- enterprise applications\n- SaaS platforms\n- customer portals\n- mobile ecosystems\n- AI automation\n- cloud migration\n- scalable architectures\n- API integrations\n- data security\n- observability\n\n6. Discuss implementation challenges.\n\nExamples:\n\n- scaling\n- security\n- governance\n- deployment\n- technical debt\n- performance\n- integration complexity\n\n7. Conclude with actionable business takeaways.\n\nFinish with a subtle introduction to Mayhem Softwares Bangladesh's expertise without sounding like an advertisement.\n\n---\n\n# SEO Requirements\n\nInclude:\n\n- H1 title\n- H2 headings\n- H3 subheadings where appropriate\n- Short paragraphs\n- Bullet lists\n- Bold important concepts\n- Natural keyword placement\n- Readability optimized for search engines\n\nTarget length:\n\n1000–1500 words\n\n---\n\n# Tone\n\nProfessional\n\nInsightful\n\nPractical\n\nBusiness-focused\n\nConfident\n\nAvoid:\n\n- clickbait\n- excessive marketing language\n- emojis\n- fluff\n- repetitive wording\n\n---\n\n# Markdown Output Format\n\nOutput ONLY valid Markdown.\n\nReturn exactly in the following format.\n\n```md\n---\ntitle: \"{{$json.angle}}\"\ndescription: \"A practical perspective on {{$json.angle}} for {{$json.target_audience}}.\"\ndate: \"{{$now}}\"\ncategory: \"Technology\"\nauthor: \"Mayhem Softwares Bangladesh\"\nkeywords:\n  - AI\n  - Cloud Engineering\n  - DevOps\n  - ERP\n  - Web Development\n  - Mobile Development\n---\n\n# {{$json.angle}}\n\n> {{$json.hook}}\n\n---\n\n## Introduction\n\nWrite a compelling opening that introduces the news and explains why readers should care.\n\n---\n\n## What Happened?\n\nSummarize the original news objectively.\n\nInclude:\n\n- What launched\n- Who announced it\n- Why it's significant\n\n---\n\n## Why This Matters\n\nExplain:\n\n- Business implications\n- Industry impact\n- Future trends\n- Opportunities\n- Risks\n\n---\n\n## Technical Perspective\n\nDiscuss architecture, engineering, scalability, infrastructure, APIs, cloud, AI, or software engineering considerations relevant to the news.\n\n---\n\n## Practical Takeaways\n\nProvide practical recommendations such as:\n\n- Evaluate emerging technologies carefully.\n- Build scalable systems early.\n- Invest in automation.\n- Prioritize observability.\n- Align technology with business goals.\n\n---\n\n## How {{$json.related_service}} Supports This\n\nExplain how the related service enables organizations to address the challenges discussed.\n\nDo NOT advertise.\n\nKeep this educational.\n\n---\n\n## Mayhem's Perspective\n\nBriefly explain Mayhem Softwares Bangladesh's engineering philosophy:\n\n- Clarity over complexity\n- Sustainable architecture\n- Practical AI adoption\n- Reliable cloud infrastructure\n- Business-driven software engineering\n\n---\n\n## Final Thoughts\n\nSummarize the key lesson.\n\nLeave readers with one thoughtful insight.\n\n---\n\n## Ready to Build Smarter Systems?\n\nTechnology trends create opportunities—but only when they're implemented strategically.\n\nAt **Mayhem Softwares Bangladesh**, we help organizations build scalable, secure, and future-ready software solutions across AI, cloud, ERP, web, and mobile technologies.\n\nLearn more:\n\n🌐 https://www.mayhembangladesh.com\n\n---\n\n*This article is based on publicly available industry news and reflects Mayhem Softwares Bangladesh's technical perspective.*\n```\n\n# Important Rules\n\n- Never fabricate facts.\n- Never copy sentences from the source article.\n- Never mention that you are an AI.\n- Never use placeholders other than those provided.\n- Keep every section relevant to the supplied news.\n- Every article should feel unique.\n- The discussion should be driven by the news, not by a generic template.\n- Use professional Markdown formatting only.\n- Output ONLY the finished Markdown document.",
+        "batching": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        928,
+        400
+      ],
+      "id": "a86616f6-69a2-43b1-be21-ce1874a5c755",
+      "name": "Generate full post in mdx",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const d = items[0]?.json ?? {};\n\n// Support common AI-node response fields\nlet content =\n  d.content ??\n  d.text ??\n  d.output ??\n  d.message?.content ??\n  '';\n\n// Ensure the content is a string\nif (typeof content !== 'string') {\n  content = JSON.stringify(content, null, 2);\n}\n\n// Remove accidental Markdown code fences\ncontent = content\n  .replace(/^```(?:md|mdx|markdown)?\\s*/i, '')\n  .replace(/\\s*```$/, '')\n  .trim();\n\n// Extract only the YAML frontmatter block\nconst frontmatterMatch = content.match(/^---\\s*\\r?\\n([\\s\\S]*?)\\r?\\n---/);\nconst frontmatter = frontmatterMatch?.[1] ?? '';\n\n// Extract a quoted or unquoted frontmatter field\nconst getField = (key) => {\n  const escapedKey = key.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');\n\n  const match = frontmatter.match(\n    new RegExp(\n      `^${escapedKey}:\\\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\\\r\\\\n]+))\\\\s*$`,\n      'mi'\n    )\n  );\n\n  return (\n    match?.[1] ??\n    match?.[2] ??\n    match?.[3]?.trim() ??\n    ''\n  );\n};\n\n// Extract metadata\nconst title = getField('title') || 'Untitled';\nconst description = getField('description');\nconst category = getField('category') || 'Blog';\nconst author =\n  getField('author') || 'Mayhem Softwares Bangladesh';\n\n// Normalize the date to YYYY-MM-DD\nconst rawDate = getField('date');\nconst parsedDate = rawDate ? new Date(rawDate) : new Date();\n\nconst date = Number.isNaN(parsedDate.getTime())\n  ? new Date().toISOString().slice(0, 10)\n  : parsedDate.toISOString().slice(0, 10);\n\n// Generate a safe slug\nconst slug =\n  title\n    .toLowerCase()\n    .normalize('NFKD')\n    .replace(/[\\u0300-\\u036f]/g, '')\n    .replace(/&/g, ' and ')\n    .replace(/[^a-z0-9]+/g, '-')\n    .replace(/^-+|-+$/g, '')\n    .slice(0, 100) || 'untitled';\n\n// Generate filenames\nconst baseFileName = `${date}-${slug}`;\nconst mdxFileName = `${baseFileName}.mdx`;\nconst manifestFileName = `${baseFileName}.json`;\n\n// Manifest object\nconst manifest = {\n  title,\n  description,\n  date,\n  slug,\n  category,\n  author,\n  file: mdxFileName\n};\n\n// Return two n8n items\nreturn [\n  {\n    json: {\n      type: 'mdx',\n      fileName: mdxFileName,\n      mimeType: 'text/mdx',\n      fileContent: content\n    }\n  },\n  {\n    json: {\n      type: 'manifest',\n      fileName: manifestFileName,\n      mimeType: 'application/json',\n      fileContent: JSON.stringify(manifest, null, 2)\n    }\n  }\n];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1376,
+        400
+      ],
+      "id": "da05a48a-77e5-4712-aa46-df5a2ede2c1a",
+      "name": "Generate MDX and json"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "resource": "file",
+        "owner": {
+          "__rl": true,
+          "value": "zaimamashiat",
+          "mode": "name"
+        },
+        "repository": {
+          "__rl": true,
+          "value": "mayhem_launchpad",
+          "mode": "list",
+          "cachedResultName": "mayhem_launchpad",
+          "cachedResultUrl": "https://github.com/zaimamashiat/mayhem_launchpad"
+        },
+        "filePath": "=public/blog/{{ $('Generate MDX and json').item.json.fileName }}",
+        "binaryData": true,
+        "commitMessage": "=Add post {{ $('Generate MDX and json').item.json.fileName }}"
+      },
+      "type": "n8n-nodes-base.github",
+      "typeVersion": 1.1,
+      "position": [
+        -224,
+        736
+      ],
+      "id": "32a0f13a-90f1-455a-919f-0f45bb76751b",
+      "name": "Create a file",
+      "webhookId": "95fb2823-0e39-460b-8d57-c9eab0b869df",
+      "credentials": {
+        "githubOAuth2Api": {
+          "id": "jMcjUTrKOWwtpmW3",
+          "name": "GitHub account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "llama-3.3-70b-versatile",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        192,
+        592
+      ],
+      "id": "8ce702c4-e28b-4052-aba3-2e956f24c074",
+      "name": "Groq Chat Model1",
+      "credentials": {
+        "groqApi": {
+          "id": "s2wdbpEaMmpdaeSz",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "llama-3.3-70b-versatile",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        928,
+        576
+      ],
+      "id": "71443ae1-ebf9-4171-80cb-8dfa85437309",
+      "name": "Groq Chat Model2",
+      "credentials": {
+        "groqApi": {
+          "id": "s2wdbpEaMmpdaeSz",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": "llama-3.3-70b-versatile",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGroq",
+      "typeVersion": 1,
+      "position": [
+        896,
+        272
+      ],
+      "id": "5eb05fcd-fa5a-43e2-bc91-8ecfafe5b23a",
+      "name": "Groq Chat Model",
+      "credentials": {
+        "groqApi": {
+          "id": "s2wdbpEaMmpdaeSz",
+          "name": "Groq account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "path": "f4f526f6-4f6c-4988-82b0-cdc0d8c4f52a",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -448,
+        144
+      ],
+      "id": "524980fd-ae98-420f-baf3-a1f6cffd7692",
+      "name": "Webhook1",
+      "webhookId": "f4f526f6-4f6c-4988-82b0-cdc0d8c4f52a"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        -16,
+        736
+      ],
+      "id": "fbb4d011-ef0b-47af-9549-2e3179c1d12f",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "RSS Read",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Replace Me",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Replace Me": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS Read": {
+      "main": [
+        [
+          {
+            "node": "Cleaning",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Basic LLM Chain": {
+      "main": [
+        [
+          {
+            "node": "Parse the LLM output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse the LLM output": {
+      "main": [
+        [
+          {
+            "node": "Filter acc to relevance",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter acc to relevance": {
+      "main": [
+        [
+          {
+            "node": "Bundle ideas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bundle ideas": {
+      "main": [
+        [
+          {
+            "node": "Generate content ideas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate content ideas": {
+      "main": [
+        [
+          {
+            "node": "Parsing the output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cleaning": {
+      "main": [
+        [
+          {
+            "node": "sort by keywords",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "sort by keywords": {
+      "main": [
+        [
+          {
+            "node": "Select relevant articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Select relevant articles": {
+      "main": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List of websites": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parsing the output": {
+      "main": [
+        [
+          {
+            "node": "Pick first idea",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick first idea": {
+      "main": [
+        [
+          {
+            "node": "Generate full post in mdx",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parsing the output1": {
+      "main": [
+        [
+          {
+            "node": "Generate MDX and json",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate full post in mdx": {
+      "main": [
+        [
+          {
+            "node": "Parsing the output1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate MDX and json": {
+      "main": [
+        [
+          {
+            "node": "Convert to File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Convert to File": {
+      "main": [
+        [
+          {
+            "node": "Create a file",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Generate content ideas",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model2": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Generate full post in mdx",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Basic LLM Chain",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook1": {
+      "main": [
+        [
+          {
+            "node": "List of websites",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create a file": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "availableInMCP": false,
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "versionId": "ff892215-ab0d-4a07-9865-4c913e9ada34",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "0c6f894757dcf64554d2d270e25907fd42c2235e6364fc7e55430d692433524d"
+  },
+  "nodeGroups": [],
+  "id": "10dQOk8J7gbryvSR",
+  "tags": []
+}

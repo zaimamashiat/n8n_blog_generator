@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Generate a technology blog with n8n and publish it to a connected GitHub repository." />
+  <title>AI Blog Publisher</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <main class="shell">
+    <section class="hero">
+      <span class="eyebrow">n8n + GitHub</span>
+      <h1>AI Blog Publisher</h1>
+      <p>Connect GitHub, choose a repository, generate a blog through n8n, and publish the MDX and manifest files.</p>
+    </section>
+
+    <section class="panel" aria-labelledby="connection-title">
+      <div class="panel-heading">
+        <div>
+          <span class="step">01</span>
+          <h2 id="connection-title">GitHub connection</h2>
+        </div>
+        <span id="connectionBadge" class="badge">Checking</span>
+      </div>
+
+      <div id="signedOutView">
+        <p class="muted">GitHub authentication happens through OAuth. Your access token stays in the server session and is never exposed to browser JavaScript.</p>
+        <a class="button primary" href="/auth/github">Connect GitHub</a>
+      </div>
+
+      <div id="signedInView" class="hidden">
+        <div class="account-row">
+          <img id="avatar" class="avatar" alt="GitHub avatar" />
+          <div>
+            <strong id="accountName"></strong>
+            <div id="accountLogin" class="muted"></div>
+          </div>
+          <button id="disconnectButton" class="button ghost" type="button">Disconnect</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="publishPanel" class="panel hidden" aria-labelledby="publish-title">
+      <div class="panel-heading">
+        <div>
+          <span class="step">02</span>
+          <h2 id="publish-title">Publish destination</h2>
+        </div>
+      </div>
+
+      <form id="publishForm">
+        <label>
+          Repository
+          <select id="repository" required>
+            <option value="">Loading repositories...</option>
+          </select>
+        </label>
+
+        <div class="grid-two">
+          <label>
+            Branch
+            <input id="branch" value="main" autocomplete="off" required />
+          </label>
+
+          <label>
+            Folder
+            <input id="folder" value="public/blog" autocomplete="off" required />
+          </label>
+        </div>
+
+        <button id="generateButton" class="button primary full" type="submit">
+          Generate and publish blog
+        </button>
+      </form>
+    </section>
+
+    <section id="statusPanel" class="panel hidden" aria-live="polite">
+      <div class="panel-heading">
+        <div>
+          <span class="step">03</span>
+          <h2>Status</h2>
+        </div>
+      </div>
+      <div id="statusMessage" class="status-message"></div>
+      <div id="publishedFiles" class="file-list"></div>
+    </section>
+  </main>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>
