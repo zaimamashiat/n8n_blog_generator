@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # n8n GitHub Blog Publisher
 
 This project provides a website where a user can:
@@ -254,3 +255,6 @@ Check the repository, branch name, organization OAuth restrictions, and the sele
 ### n8n times out
 
 Long workflows can exceed webhook response limits. Reduce the number of analyzed articles or redesign the workflow as an asynchronous job with a status endpoint.
+=======
+# n8n_blog_generator
+>>>>>>> 18fb4be298f9b5f610821eef94260217eb090e2f
