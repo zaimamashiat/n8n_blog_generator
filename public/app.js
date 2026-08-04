@@ -24,7 +24,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const statusMessage = $('statusMessage');
   const publishedFiles = $('publishedFiles');
+
   const disconnectButton = $('disconnectButton');
+  const avatar = $('avatar');
+  const accountName = $('accountName');
+  const accountLogin = $('accountLogin');
 
   let generatedIdeas = [];
   let selectedIdea = null;
@@ -43,7 +47,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     if (!response.ok) {
       throw new Error(
-        data.error || `Request failed with status ${response.status}`,
+        data.error ||
+          data.message ||
+          `Request failed with status ${response.status}`,
       );
     }
 
@@ -61,7 +67,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function showStatus(message, type = '') {
     if (!statusPanel || !statusMessage) {
-      console.error(message);
+      console.log(message);
       return;
     }
 
@@ -70,32 +76,56 @@ document.addEventListener('DOMContentLoaded', () => {
     statusMessage.textContent = message;
   }
 
-  async function loadRepositories() {
-    if (!repositorySelect) {
+  function clearStatus() {
+    if (!statusPanel || !statusMessage) {
       return;
     }
 
+    statusPanel.classList.add('hidden');
+    statusMessage.className = 'status-message';
+    statusMessage.textContent = '';
+  }
+
+  async function loadRepositories() {
+    if (!repositorySelect) {
+      console.warn('Missing element: #repository');
+      return;
+    }
+
+    repositorySelect.disabled = true;
     repositorySelect.innerHTML =
       '<option value="">Loading repositories...</option>';
 
     try {
-      const repositories = await request('/api/repositories');
+      const result = await request('/api/repositories');
+
+      const repositories = Array.isArray(result)
+        ? result
+        : result.repositories || [];
 
       repositorySelect.innerHTML =
         '<option value="">Choose a repository</option>';
 
-      for (const repository of repositories) {
+      repositories.forEach((repository) => {
         const option = document.createElement('option');
 
-        option.value = repository.fullName;
+        option.value =
+          repository.fullName ||
+          repository.full_name ||
+          repository.name ||
+          '';
+
         option.textContent =
-          `${repository.fullName}` +
+          `${option.value}` +
           `${repository.private ? ' (private)' : ''}`;
 
-        option.dataset.branch = repository.defaultBranch;
+        option.dataset.branch =
+          repository.defaultBranch ||
+          repository.default_branch ||
+          'main';
 
         repositorySelect.appendChild(option);
-      }
+      });
 
       if (!repositories.length) {
         repositorySelect.innerHTML =
@@ -106,11 +136,14 @@ document.addEventListener('DOMContentLoaded', () => {
         '<option value="">Could not load repositories</option>';
 
       showStatus(error.message, 'error');
+    } finally {
+      repositorySelect.disabled = false;
     }
   }
 
   function renderIdeas() {
     if (!ideasGrid) {
+      console.warn('Missing element: #ideasGrid');
       return;
     }
 
@@ -120,28 +153,63 @@ document.addEventListener('DOMContentLoaded', () => {
       const card = document.createElement('article');
 
       card.className = 'idea-card';
+      card.dataset.index = String(index);
 
       card.innerHTML = `
-        <div class="idea-number">Idea ${index + 1}</div>
+        <div class="idea-number">
+          Idea ${index + 1}
+        </div>
 
-        <h3>${escapeHtml(idea.angle || 'Untitled idea')}</h3>
+        <h3>
+          ${escapeHtml(
+            idea.angle ||
+              idea.title ||
+              idea.topic ||
+              'Untitled idea',
+          )}
+        </h3>
 
-        <p class="hook">${escapeHtml(idea.hook || '')}</p>
+        <p class="hook">
+          ${escapeHtml(
+            idea.hook ||
+              idea.description ||
+              idea.summary ||
+              '',
+          )}
+        </p>
 
         <dl>
           <div>
             <dt>Audience</dt>
-            <dd>${escapeHtml(idea.target_audience || 'General')}</dd>
+            <dd>
+              ${escapeHtml(
+                idea.target_audience ||
+                  idea.audience ||
+                  'General',
+              )}
+            </dd>
           </div>
 
           <div>
             <dt>Service</dt>
-            <dd>${escapeHtml(idea.related_service || 'Technology')}</dd>
+            <dd>
+              ${escapeHtml(
+                idea.related_service ||
+                  idea.service ||
+                  'Technology',
+              )}
+            </dd>
           </div>
 
           <div>
             <dt>Source</dt>
-            <dd>${escapeHtml(idea.article_source || 'News feed')}</dd>
+            <dd>
+              ${escapeHtml(
+                idea.article_source ||
+                  idea.source ||
+                  'News feed',
+              )}
+            </dd>
           </div>
         </dl>
 
@@ -157,39 +225,71 @@ document.addEventListener('DOMContentLoaded', () => {
       ideasGrid.appendChild(card);
     });
 
-    ideasGrid
-      .querySelectorAll('.select-idea')
-      .forEach((button) => {
-        button.addEventListener('click', () => {
-          selectIdea(Number(button.dataset.index));
-        });
+    const selectButtons =
+      ideasGrid.querySelectorAll('.select-idea');
+
+    selectButtons.forEach((button) => {
+      button.addEventListener('click', () => {
+        const index = Number(button.dataset.index);
+
+        if (Number.isNaN(index)) {
+          showStatus(
+            'Could not select this idea.',
+            'error',
+          );
+          return;
+        }
+
+        selectIdea(index);
       });
+    });
   }
 
   function selectIdea(index) {
     selectedIdea = generatedIdeas[index];
 
     if (!selectedIdea) {
-      showStatus('The selected idea could not be found.', 'error');
+      showStatus(
+        'The selected idea could not be found.',
+        'error',
+      );
       return;
     }
 
-    ideasGrid
-      ?.querySelectorAll('.idea-card')
-      .forEach((card, cardIndex) => {
-        card.classList.toggle(
-          'selected',
-          cardIndex === index,
-        );
-      });
+    if (ideasGrid) {
+      ideasGrid
+        .querySelectorAll('.idea-card')
+        .forEach((card, cardIndex) => {
+          card.classList.toggle(
+            'selected',
+            cardIndex === index,
+          );
+        });
+    }
 
     if (selectedIdeaSummary) {
       selectedIdeaSummary.innerHTML = `
-        <span class="eyebrow">Selected idea</span>
+        <span class="eyebrow">
+          Selected idea
+        </span>
 
-        <h3>${escapeHtml(selectedIdea.angle)}</h3>
+        <h3>
+          ${escapeHtml(
+            selectedIdea.angle ||
+              selectedIdea.title ||
+              selectedIdea.topic ||
+              'Selected idea',
+          )}
+        </h3>
 
-        <p>${escapeHtml(selectedIdea.hook || '')}</p>
+        <p>
+          ${escapeHtml(
+            selectedIdea.hook ||
+              selectedIdea.description ||
+              selectedIdea.summary ||
+              '',
+          )}
+        </p>
       `;
     }
 
@@ -202,205 +302,301 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   repositorySelect?.addEventListener('change', () => {
-    const option = repositorySelect.selectedOptions[0];
+    const selectedOption =
+      repositorySelect.selectedOptions?.[0];
 
-    if (option?.dataset.branch && branchInput) {
-      branchInput.value = option.dataset.branch;
+    if (
+      selectedOption?.dataset?.branch &&
+      branchInput
+    ) {
+      branchInput.value =
+        selectedOption.dataset.branch;
     }
   });
 
-  disconnectButton?.addEventListener('click', async () => {
-    try {
-      await request('/auth/logout', {
-        method: 'POST',
-        body: '{}',
-      });
+  disconnectButton?.addEventListener(
+    'click',
+    async () => {
+      disconnectButton.disabled = true;
+      disconnectButton.textContent =
+        'Disconnecting...';
 
-      window.location.assign('/');
-    } catch (error) {
-      showStatus(error.message, 'error');
-    }
-  });
+      try {
+        await request('/auth/logout', {
+          method: 'POST',
+          body: JSON.stringify({}),
+        });
 
-  ideaForm?.addEventListener('submit', async (event) => {
-    event.preventDefault();
+        window.location.assign('/');
+      } catch (error) {
+        showStatus(error.message, 'error');
 
-    selectedIdea = null;
-    generatedIdeas = [];
+        disconnectButton.disabled = false;
+        disconnectButton.textContent =
+          'Disconnect';
+      }
+    },
+  );
 
-    if (ideasGrid) {
-      ideasGrid.innerHTML = '';
-    }
+  ideaForm?.addEventListener(
+    'submit',
+    async (event) => {
+      event.preventDefault();
 
-    if (publishedFiles) {
-      publishedFiles.innerHTML = '';
-    }
+      selectedIdea = null;
+      generatedIdeas = [];
 
-    ideasPanel?.classList.add('hidden');
-    publishPanel?.classList.add('hidden');
-
-    if (ideaButton) {
-      ideaButton.disabled = true;
-      ideaButton.textContent = 'Generating ideas...';
-    }
-
-    showStatus(
-      'n8n is reading current feeds and generating three ideas.',
-    );
-
-    try {
-      const result = await request('/api/ideas', {
-        method: 'POST',
-        body: JSON.stringify({
-          category: categorySelect?.value || '',
-        }),
-      });
-
-      generatedIdeas = result.ideas || [];
-
-      if (!generatedIdeas.length) {
-        throw new Error('No ideas were returned.');
+      if (ideasGrid) {
+        ideasGrid.innerHTML = '';
       }
 
-      renderIdeas();
+      if (publishedFiles) {
+        publishedFiles.innerHTML = '';
+      }
 
-      ideasPanel?.classList.remove('hidden');
+      if (selectedIdeaSummary) {
+        selectedIdeaSummary.innerHTML = '';
+      }
 
-      showStatus(
-        `Generated ${generatedIdeas.length} ideas. Select one to continue.`,
-        'success',
-      );
+      ideasPanel?.classList.add('hidden');
+      publishPanel?.classList.add('hidden');
 
-      ideasPanel?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'start',
-      });
-    } catch (error) {
-      showStatus(error.message, 'error');
-    } finally {
       if (ideaButton) {
-        ideaButton.disabled = false;
-        ideaButton.textContent = 'Generate ideas';
+        ideaButton.disabled = true;
+        ideaButton.textContent =
+          'Generating ideas...';
       }
-    }
-  });
 
-  publishForm?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-
-    if (!selectedIdea) {
       showStatus(
-        'Select an idea before publishing.',
-        'error',
+        'n8n is reading current feeds and generating three ideas.',
       );
-      return;
-    }
 
-    if (publishedFiles) {
-      publishedFiles.innerHTML = '';
-    }
+      try {
+        const result = await request('/api/ideas', {
+          method: 'POST',
+          body: JSON.stringify({
+            category:
+              categorySelect?.value || 'General',
+          }),
+        });
 
-    if (publishButton) {
-      publishButton.disabled = true;
-      publishButton.textContent = 'Writing and publishing...';
-    }
+        generatedIdeas = Array.isArray(result)
+          ? result
+          : result.ideas || [];
 
-    showStatus(
-      'n8n is writing the full article from your selected idea.',
-    );
+        if (!generatedIdeas.length) {
+          throw new Error(
+            'No ideas were returned by n8n.',
+          );
+        }
 
-    try {
-      const result = await request('/api/publish', {
-        method: 'POST',
-        body: JSON.stringify({
-          category: categorySelect?.value || '',
-          idea: selectedIdea,
-          repository: repositorySelect?.value || '',
-          branch: branchInput?.value.trim() || 'main',
-          folder: folderInput?.value.trim() || 'public/blog',
-        }),
-      });
+        renderIdeas();
 
-      showStatus(result.message, 'success');
+        ideasPanel?.classList.remove('hidden');
 
-      for (const file of result.files || []) {
-        const item = document.createElement('div');
+        showStatus(
+          `Generated ${generatedIdeas.length} ideas. Select one to continue.`,
+          'success',
+        );
 
-        item.className = 'file-item';
-
-        item.innerHTML = file.url
-          ? `
-            <a
-              href="${escapeHtml(file.url)}"
-              target="_blank"
-              rel="noreferrer"
-            >
-              ${escapeHtml(file.path)}
-            </a>
-          `
-          : escapeHtml(file.path);
-
-        publishedFiles?.appendChild(item);
+        ideasPanel?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        });
+      } catch (error) {
+        showStatus(error.message, 'error');
+      } finally {
+        if (ideaButton) {
+          ideaButton.disabled = false;
+          ideaButton.textContent =
+            'Generate ideas';
+        }
       }
-    } catch (error) {
-      showStatus(error.message, 'error');
-    } finally {
+    },
+  );
+
+  publishForm?.addEventListener(
+    'submit',
+    async (event) => {
+      event.preventDefault();
+
+      if (!selectedIdea) {
+        showStatus(
+          'Select an idea before publishing.',
+          'error',
+        );
+        return;
+      }
+
+      if (
+        !repositorySelect?.value
+      ) {
+        showStatus(
+          'Select a GitHub repository.',
+          'error',
+        );
+        return;
+      }
+
+      if (publishedFiles) {
+        publishedFiles.innerHTML = '';
+      }
+
       if (publishButton) {
-        publishButton.disabled = false;
+        publishButton.disabled = true;
         publishButton.textContent =
-          'Generate full blog and publish';
+          'Writing and publishing...';
       }
-    }
-  });
+
+      showStatus(
+        'n8n is writing the full article from your selected idea.',
+      );
+
+      try {
+        const result = await request(
+          '/api/publish',
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              category:
+                categorySelect?.value ||
+                'General',
+
+              idea: selectedIdea,
+
+              repository:
+                repositorySelect.value,
+
+              branch:
+                branchInput?.value.trim() ||
+                'main',
+
+              folder:
+                folderInput?.value.trim() ||
+                'public/blog',
+            }),
+          },
+        );
+
+        showStatus(
+          result.message ||
+            'Blog published successfully.',
+          'success',
+        );
+
+        const files = result.files || [];
+
+        if (!files.length && publishedFiles) {
+          publishedFiles.innerHTML = `
+            <div class="file-item">
+              Publishing completed.
+            </div>
+          `;
+        }
+
+        files.forEach((file) => {
+          const item =
+            document.createElement('div');
+
+          item.className = 'file-item';
+
+          const filePath =
+            file.path ||
+            file.name ||
+            'Published file';
+
+          if (file.url) {
+            const link =
+              document.createElement('a');
+
+            link.href = file.url;
+            link.target = '_blank';
+            link.rel = 'noreferrer';
+            link.textContent = filePath;
+
+            item.appendChild(link);
+          } else {
+            item.textContent = filePath;
+          }
+
+          publishedFiles?.appendChild(item);
+        });
+      } catch (error) {
+        showStatus(error.message, 'error');
+      } finally {
+        if (publishButton) {
+          publishButton.disabled = false;
+          publishButton.textContent =
+            'Generate full blog and publish';
+        }
+      }
+    },
+  );
 
   async function initialize() {
     const params = new URLSearchParams(
       window.location.search,
     );
 
-    const oauthError = params.get('error');
+    const oauthError =
+      params.get('error');
 
     if (oauthError) {
       showStatus(oauthError, 'error');
     }
 
     try {
-      const session = await request('/api/session');
+      const session =
+        await request('/api/session');
+
+      const connected =
+        Boolean(session.connected);
 
       if (connectionBadge) {
         connectionBadge.textContent =
-          session.connected
+          connected
             ? 'Connected'
             : 'Not connected';
 
         connectionBadge.classList.toggle(
           'connected',
-          session.connected,
+          connected,
         );
       }
 
       signedOutView?.classList.toggle(
         'hidden',
-        session.connected,
+        connected,
       );
 
       signedInView?.classList.toggle(
         'hidden',
-        !session.connected,
+        !connected,
       );
 
       categoryPanel?.classList.toggle(
         'hidden',
-        !session.connected,
+        !connected,
       );
 
-      if (session.connected) {
-        const avatar = $('avatar');
-        const accountName = $('accountName');
-        const accountLogin = $('accountLogin');
+      ideasPanel?.classList.add('hidden');
+      publishPanel?.classList.add('hidden');
 
+      if (!oauthError) {
+        clearStatus();
+      }
+
+      if (connected) {
         if (avatar) {
-          avatar.src = session.user?.avatarUrl || '';
+          avatar.src =
+            session.user?.avatarUrl ||
+            session.user?.avatar_url ||
+            '';
+
+          avatar.alt =
+            session.user?.name ||
+            session.user?.login ||
+            'GitHub user';
         }
 
         if (accountName) {
@@ -412,12 +608,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (accountLogin) {
           accountLogin.textContent =
-            `@${session.user?.login || ''}`;
+            session.user?.login
+              ? `@${session.user.login}`
+              : '';
         }
 
         if (folderInput) {
           folderInput.value =
-            session.defaultFolder || 'public/blog';
+            session.defaultFolder ||
+            'public/blog';
+        }
+
+        if (
+          branchInput &&
+          !branchInput.value
+        ) {
+          branchInput.value = 'main';
         }
 
         await loadRepositories();
@@ -426,7 +632,23 @@ document.addEventListener('DOMContentLoaded', () => {
       if (connectionBadge) {
         connectionBadge.textContent =
           'Configuration error';
+
+        connectionBadge.classList.remove(
+          'connected',
+        );
       }
+
+      signedOutView?.classList.remove(
+        'hidden',
+      );
+
+      signedInView?.classList.add(
+        'hidden',
+      );
+
+      categoryPanel?.classList.add(
+        'hidden',
+      );
 
       showStatus(error.message, 'error');
     }
