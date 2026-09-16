@@ -1,4 +1,4 @@
-<<<<<<< HEAD
+
 # n8n GitHub Blog Publisher
 
 This project provides a website where a user can:
